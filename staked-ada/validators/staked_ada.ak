@@ -51,6 +51,8 @@ validator settings(
           [output] ->
             // any reasons to check the amount of token is different (i.e. there was any mint or burn)
             and {
+              // only token accepted in output is staked ada, no other rubbish
+              policies(output.value) == [contract_hash],
               tx.extra_signatories |> list.has(actual_datum.owner),
               // ensure the only output w/ token is the contract itself
               output.address == own_input.output.address,
@@ -65,7 +67,9 @@ validator settings(
         expect Some(own_input) = find_input(tx.inputs, own_ref)
         expect Some(output) = tx.outputs |> list.head
         and {
+          // old and new owner to sign
           tx.extra_signatories |> list.has(actual_datum.owner),
+          tx.extra_signatories |> list.has(new_owner),
           own_input.output.value == output.value,
           output.datum == InlineDatum(Datum(new_owner)),
         }
@@ -106,6 +110,9 @@ validator settings(
             tx.outputs,
             fn(output) { assets.without_lovelace(output.value) == tx.mint },
           )
+        // A proper datum is created
+        expect InlineDatum(datum) = output.datum
+        expect actual_datum: Datum = datum
         and {
           // Minting just one policy and of correct type
           policies(tx.mint) == [own_policy_id],
@@ -114,20 +121,26 @@ validator settings(
           // Tokens get locked in contract
           output.address.payment_credential == Script(own_policy_id),
           spends_protocol_boot_utxo,
+          // Future Owner must accept the assignment (they must prove they can sign)
+          tx.extra_signatories |> list.has(actual_datum.owner),
         }
       }
       [locked_input] -> {
         // calculate total
-        let final_staked_ada =
+        let tokens_in_output =
           locked_input.output.value
             |> assets.merge(tx.mint)
             |> assets.without_lovelace
+        let final_staked_ada_amount =
+          tokens_in_output
             |> quantity_of(own_policy_id, staked_ada_name)
         // Spend checks all tokens are sent back into contract
         and {
           policies(tx.mint) == [own_policy_id],
-          final_staked_ada > 0,
-          final_staked_ada < max_circulating_supply,
+          // no rubbish sent to output, only ada and staked_ada
+          policies(tokens_in_output) == [own_policy_id],
+          final_staked_ada_amount > 0,
+          final_staked_ada_amount < max_circulating_supply,
         }
       }
       _ -> False
